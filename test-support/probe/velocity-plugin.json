@@ -1,0 +1,1 @@
+{"id":"nordqueuetestprobe","name":"NordQueueTestProbe","version":"1.0","authors":["Local tests only"],"dependencies":[{"id":"nordqueue","optional":false}],"main":"com.nordfjell.nordqueuetest.QueueTestProbe"}
