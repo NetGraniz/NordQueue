@@ -1,1 +1,1 @@
-{"id":"nordqueue","name":"NordQueue","version":"1.1.2","description":"Lightweight queue, temporary-ban limbo, and backend failover for Nord Fjell","authors":["Nord Fjell"],"dependencies":[],"main":"com.nordfjell.nordqueue.NordQueuePlugin"}
+{"id":"nordqueue","name":"NordQueue","version":"${project.version}","description":"Lightweight queue, temporary-ban limbo, and backend failover for Nord Fjell","authors":["Nord Fjell"],"dependencies":[],"main":"com.nordfjell.nordqueue.NordQueuePlugin"}

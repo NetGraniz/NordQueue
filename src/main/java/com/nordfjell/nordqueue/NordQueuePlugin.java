@@ -55,7 +55,7 @@ import java.util.concurrent.ScheduledExecutorService;
 @Plugin(
         id = "nordqueue",
         name = "NordQueue",
-        version = "1.1.2",
+        version = "1.1.3",
         description = "Lightweight queue and backend failover for Nord Fjell",
         authors = {"Nord Fjell"}
 )

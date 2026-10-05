@@ -1,5 +1,8 @@
 # NordQueue
 
+> Release build and installation requirements: see [BUILDING.md](BUILDING.md).
+> Older local paths below describe historical test fixtures, not the release build.
+
 Velocity queue core for Nord Fjell. Players enter the NanoLimbo server named `queue`, are
 kept in FIFO order, and move to `main` when capacity is available. A persistent title is
 resent while waiting. Kicks caused by a backend restart redirect players back to the queue.
