@@ -1,115 +1,98 @@
 # NordQueue
 
-> Release build and installation requirements: see [BUILDING.md](BUILDING.md).
-> Older local paths below describe historical test fixtures, not the release build.
+Queue core for Velocity. Players wait on the NanoLimbo backend named `queue` and move to `main` in FIFO order when capacity is available.
 
-Velocity queue core for Nord Fjell. Players enter the NanoLimbo server named `queue`, are
-kept in FIFO order, and move to `main` when capacity is available. A persistent title is
-resent while waiting. Kicks caused by a backend restart redirect players back to the queue.
-Authentication timeouts disconnect the player instead of creating an endless
-queue-to-main reconnect loop.
+A title repeats while they wait. Backend-restart kicks return players to the queue. Authentication timeouts disconnect them instead of creating a queue-to-main reconnect loop.
 
-Priority players are listed one username or UUID per line in
-`plugins/nordqueue/priority-players.txt`. Priority uses a separate FIFO and is transferred
-before the regular queue. The server-list player hover reports in-game, regular queue, and
-priority queue counts.
+## Priority and suspended players
 
-NordBans synchronization adds a third persistent state: suspended players remain in the
-limbo server, are excluded from both queues, and see the reason and remaining time. When
-the ban expires or is removed, they join the end of the regular queue. The proxy also
-recognizes a structured Paper kick marker from the trusted main backend so missed plugin messages repair themselves
-when a suspended player next reaches the backend.
+List priority players in `plugins/nordqueue/priority-players.txt`, one username or UUID per line. Priority players have their own FIFO queue and transfer before eligible regular players.
 
-Commands: `/queue`, `/qposition`, and `/nordqueue reload` (`nordqueue.admin`).
+The server-list player hover shows counts for the main server, regular queue and priority queue.
+
+NordBans synchronization adds a persistent suspended state. Suspended players stay in limbo outside both queues and see the ban reason and remaining time. Expiry or unban places them at the end of the regular queue.
+
+A structured Paper kick marker from the trusted main backend can repair a missed plugin message when a suspended player next reaches that backend.
+
+## Commands
+
+- `/queue` or `/qposition` shows a player's position or suspension state.
+- `/nordqueue reload` reloads settings and the priority roster.
+
+## Permissions
+
+| Permission | Allows |
+| --- | --- |
+| `nordqueue.admin` | `/nordqueue` management, including `reload` |
+
+Player access comes from Velocity's permission provider; NordQueue registers no default player grant for its admin node. Backend-only permissions do not grant proxy rights.
+
+`/queue` and `/qposition` have no dedicated permission node and are player-only. Priority comes from `priority-players.txt`, not a permission node. Review offline-mode identity trust before assigning priority by name or UUID.
 
 ## 1.1.2 ban receiver storage
 
-Prepared release; production deployment is separate. See SECURITY-1.1.2.md.
-Immutable snapshots publish after successful atomic persistence; loading is strict.
-A bounded latest-per-account inbox batches up to 256 changes on one storage worker.
-Duplicate committed records do not write again. Pending BAN restricts immediately;
-UNBAN releases only after commit. Main admission pauses while synchronization/storage
-is unfinished or unhealthy, instead of letting a failed write bypass a ban.
-I/O errors retain work and retry after five seconds; corrupt initialization requires
-repair/restart and overflow requires reconciliation. Limbo may continue serving clients.
-V1 has no acknowledgments; this does not guarantee delivery of every transport message.
+The historical report is `SECURITY-1.1.2.md`, excluded from the public repository. Deployment is separate from building or testing the release.
 
-The build also runs 22 BanStorageTest scenarios. The queue integration harness runs
-15 scenarios and supports --modern with fresh local-only forwarding secrets.
-test-support/build-probe.ps1 prepares a helper for local fixtures only. The separate
-bans-compatibility.cjs runs 11 NordBans interoperability scenarios. Never install probes
-or local fixture configuration on production.
+Immutable ban snapshots publish after successful atomic persistence. Loading is strict. A bounded latest-per-account inbox batches up to 256 changes on one storage worker; duplicate committed records do not write again.
 
-## 1.1.1 queue/session fixes
+Pending BAN restricts immediately. UNBAN releases only after commit. Main-server admission pauses while synchronization or storage is unfinished or unhealthy, so a failed write cannot bypass a ban.
 
-- The queue, enqueue timestamps, retry deadlines and capacity reservation now live under one
-  state monitor. Each proxy connection has an identity-based session token; each transfer also
-  identifies the particular queue entry. Late callbacks and disconnect events cannot mutate a
-  replacement connection or a newly queued entry for the same player.
-- Selection skips temporarily ineligible heads without changing their FIFO position. Eligible
-  priority players still precede eligible regular players. A single pending transfer reserves the
-  next slot; admission is single-use and valid only for the selected connection and target.
-- A monotonic-clock minimum interval between attempts enforces `transfer-interval-seconds`
-  even if scheduled tasks catch up or configuration is repeatedly reloaded. With the existing
-  default, there is at most one new attempt per second; successful throughput can be lower.
-- `connection-attempt-timeout-seconds` is a new optional setting (default 30, range 1..300).
-  A hung attempt invalidates and disconnects its exact connection before allowing a fresh one.
-  This prevents late network results from admitting a timed-out player into a reserved slot.
-- Snapshot readers reuse an immutable, consistent `QueueSnapshot`; positions are computed once
-  per queue change instead of by repeated linear searches. `position(UUID)` retains its existing
-  per-group meaning; `snapshot().absolutePosition(UUID)` provides the combined position.
-- Titles use one queue snapshot per refresh. Membership checks are constant-time. All existing
-  public methods used by NordQueueTab/NordQueueNotice remain available.
-- Default NordAuth `Login timed out.` and temporary database-unavailability kicks are terminal,
-  as are the older AuthMe timeout strings. Other backend failures fall back to limbo when it is
-  available. Custom/localized authentication kick messages require explicit recognition; do not
-  assume arbitrary text is recognized.
-- Reload keeps the last valid settings on failure, retains retry/enqueue metadata and invalidates
-  obsolete scheduled-task generations. Changing main/queue server names with players connected
-  requires a proxy restart. Shutdown clears queue/session state and cancels plugin timers.
+I/O errors retain pending work and retry after 5 seconds. Corrupt initialization requires repair and restart; inbox overflow requires reconciliation. Limbo can continue serving clients.
 
-`estimatedSeconds(UUID)` remains a compatibility estimate of transfer scheduling only. It cannot
-predict when a full main server will free a slot; it is not a reliable waiting-time ETA.
-NordQueueTab's full-list fan-out and disconnected-viewer cleanup were addressed in
-its separately released 1.1.0. Ban-storage I/O/batching is addressed in this project's
-1.1.2. Priority identity verification in offline mode and acknowledged reconciliation
-remain separate work.
+The V1 protocol has no acknowledgments and does not guarantee delivery of every transport message.
+
+The build runs 22 `BanStorageTest` scenarios. The queue integration harness runs 15 scenarios; `--modern` creates fresh local-only forwarding secrets. `test-support/build-probe.ps1` builds a helper for fixtures only. The separate `bans-compatibility.cjs` checks 11 NordBans interoperability scenarios.
+
+Never install probes or fixture configuration on production.
+
+## 1.1.1 queue and session fixes
+
+The queue, enqueue timestamps, retry deadlines and capacity reservation share one state monitor. Each connection has an identity-based session token; each transfer also identifies its queue entry. Late callbacks and disconnect events cannot mutate a replacement connection or a newly queued entry for that player.
+
+Selection skips temporarily ineligible heads without changing their FIFO position. Eligible priority players still precede eligible regular players. One pending transfer reserves the next slot; its single-use admission belongs to the selected connection and target.
+
+A monotonic-clock minimum interval enforces `transfer-interval-seconds`, including during scheduler catch-up or repeated reloads. The default allows at most one new attempt per second. Successful transfers can be slower.
+
+`connection-attempt-timeout-seconds` defaults to 30 and accepts 1..300. A hung attempt invalidates and disconnects its exact connection before a new attempt starts. A late network result cannot reuse the timed-out admission.
+
+Readers share an immutable `QueueSnapshot`. Positions are computed once per queue change, not through repeated linear searches. `position(UUID)` remains per-group; `snapshot().absolutePosition(UUID)` returns the combined position.
+
+Titles use one snapshot per refresh. Membership checks are constant-time, and public methods used by NordQueueTab and NordQueueNotice remain available.
+
+NordAuth's default `Login timed out.` and temporary database-unavailability kicks are terminal, as are legacy AuthMe timeout strings. Other backend failures fall back to limbo when it is available. Custom or localized authentication messages need explicit recognition.
+
+A failed reload keeps valid settings and enqueue/retry metadata. Reload invalidates obsolete task generations. Changing main or queue server names while players are connected requires a proxy restart. Shutdown clears queue/session state and cancels plugin timers.
+
+`estimatedSeconds(UUID)` estimates transfer scheduling only. It cannot predict when a full main server will free a slot and is not a reliable waiting-time ETA.
+
+NordQueueTab 1.1.0 addresses full-list fan-out and disconnected-viewer cleanup. NordQueue 1.1.2 addresses ban-storage I/O and batching. Offline-mode priority identity verification and acknowledged reconciliation remain separate work.
 
 ## Build and isolated tests
 
-Use Java 25 and `build.ps1 -ProxyPath <directory containing velocity.jar>`. For verification, the
-Velocity executable was copied to a local fixture; production was not started, stopped or edited.
-The build runs the existing `BanProtocolTest` and 15 queue-state regression scenarios, including
-1000 synthetic entries with concurrent snapshot readers. These are algorithm tests, not proof
-of supporting 1000 connected clients.
+Use Maven 3.9+ and JDK 25. Run `mvn clean verify` or `./build.ps1`; see [BUILDING.md](BUILDING.md). The release build does not use a live proxy directory.
 
-All source, test helpers and release artifacts stay in this project on the network drive.
-The local fixture is `C:\Users\artyo\Documents\Codex\nordqueue-test-20261003`:
+The build includes `BanProtocolTest` and 15 queue-state regression scenarios, including 1000 synthetic entries with concurrent snapshot readers. Algorithm tests do not establish capacity for 1000 connected clients.
 
-- `proxy`: copied Velocity executable, NordQueue 1.1.1, unchanged NordQueueTab/NordQueueNotice
-  JARs, and a **local-test-only** `NordQueueTestProbe`.
-- `queue` / `main`: copied NanoLimbo executables with newly generated local configuration.
-- `paper`: copied Paper executable/libraries and the existing accepted EULA, a new world and
-  synthetic database, and the already verified NordAuth 1.2.2 release. No production world,
-  credentials, proxy forwarding secrets or operational configuration is copied.
+### Historical 1.1.1 fixture
 
-The helper in `test-support/probe` must be compiled against the same Velocity executable and
-the built NordQueue JAR, packaged with its own `velocity-plugin.json`, and installed **only**
-in the local proxy. It injects controlled denial/delay and ban/unban scenarios through a
-console-only command. Never install this probe on production.
+The earlier verification used `C:\Users\artyo\Documents\Codex\nordqueue-test-20261003` with these isolated components:
 
-The `test-support/integration.cjs` harness prepares its own configuration, starts hidden child
-processes on loopback ports 25615/25616/25617, runs ten integration scenarios, and stops them.
-Its clients use the locally cached pinned NordLoadTest/Mineflayer dependencies prepared during
-the NordAuth tests. Set `NODE_PATH` to that local `clients/node_modules` directory and run:
+- `proxy`: copied Velocity executable, NordQueue 1.1.1, unchanged NordQueueTab/NordQueueNotice JARs and the test-only `NordQueueTestProbe`.
+- `queue` and `main`: copied NanoLimbo executables with fresh local configuration.
+- `paper`: copied executable/libraries and accepted EULA, a new world, a synthetic database and NordAuth 1.2.2.
+
+No production world, credentials, forwarding secrets or operational configuration were copied. Production was not started, stopped or edited for that verification. The old network-share source path and `-ProxyPath` build workflow are historical, not the current release build.
+
+Compile `test-support/probe` against the fixture's Velocity API and built NordQueue JAR, with its own `velocity-plugin.json`. Its console-only commands inject controlled denial, delay, ban and unban scenarios. Install it only on the local proxy.
+
+`test-support/integration.cjs` prepares local configuration, starts hidden processes on loopback ports 25615/25616/25617, runs checks and stops the processes. The original 1.1.1 fixture ran ten integration scenarios; later receiver tests expanded the suite.
+
+Clients use locally cached, pinned NordLoadTest/Mineflayer dependencies prepared for the NordAuth checks. Set `NODE_PATH` to the local `clients/node_modules` directory:
 
 ```powershell
-node 'Z:\Minecraft Plagins\NordQueue\test-support\integration.cjs' `
-  'C:\Users\artyo\Documents\Codex\nordqueue-test-20261003' `
-  'C:\Program Files\Java\jdk-25\bin\java.exe'
+node ./test-support/integration.cjs $FreshFixture $JavaExecutable
 ```
 
-The fixture disables forwarding/rate limiting **locally only** to exercise multiple synthetic
-clients. It does not validate production modern-forwarding security or WAN load handling.
-The 3-second injected watchdog is restored to the default 30 seconds for cold Paper logins.
-The report and checksums for this verified release are in `QUEUE-1.1.1.md`.
+The historical fixture disabled forwarding and rate limiting locally to exercise synthetic clients. It did not test production modern-forwarding security or WAN load. Modern-forwarding checks use the separate `--modern` mode described above.
+
+The injected 3-second watchdog is restored to the default 30 seconds for cold Paper logins. The historical report and checksums are in `QUEUE-1.1.1.md`, excluded from the public repository.
