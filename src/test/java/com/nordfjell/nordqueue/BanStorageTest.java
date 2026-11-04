@@ -13,7 +13,7 @@ public final class BanStorageTest {
     interface Checked {void run() throws Exception;}
     private static void test(String name,Checked operation)throws Exception{operation.run();passed++;System.out.println("PASS: "+name);}
     private static Path file()throws IOException{Path dir=Files.createTempDirectory("nordqueue-store-test-");directories.add(dir);return dir.resolve("bans.properties");}
-    private static SuspendedBan ban(String name){return new SuspendedBan(name,System.currentTimeMillis()+3600000,"Тестовый бан");}
+    private static SuspendedBan ban(String name){return new SuspendedBan(name,System.currentTimeMillis()+3600000,"Test ban");}
     private static BanInbox.Change put(SuspendedBan ban){return new BanInbox.Change(ban.playerName(),ban);}
     private static BanInbox.Change remove(String name){return new BanInbox.Change(name,null);}
     private static String encode(String value){return Base64.getUrlEncoder().withoutPadding().encodeToString(value.getBytes(StandardCharsets.UTF_8));}
