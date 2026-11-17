@@ -18,6 +18,14 @@ A structured Paper kick marker from the trusted main backend can repair a missed
 
 - `/queue` or `/qposition` shows a player's position or suspension state.
 - `/nordqueue reload` reloads settings and the priority roster.
+- `/nordqueue priority add <username|uuid>` grants priority immediately and persists it.
+- `/nordqueue priority remove <username|uuid>` revokes priority immediately and persists it.
+- `/nordqueue priority status <username|uuid>` reports whether an identity has priority.
+
+Priority mutations are idempotent, so purchase, expiry, refund and chargeback automation may safely retry them.
+For a Tebex package, run `nordqueue priority add {username}` on purchase and renewal, and
+`nordqueue priority remove {username}` on expiry, refund and chargeback. Install the official Tebex plugin on
+the Velocity proxy; NordQueue does not store a Tebex secret or depend on Tebex.
 
 ## Permissions
 

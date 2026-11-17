@@ -41,11 +41,9 @@ import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.HashSet;
 import java.util.Locale;
 import java.util.Optional;
 import java.util.Properties;
-import java.util.Set;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
@@ -55,7 +53,7 @@ import java.util.concurrent.ScheduledExecutorService;
 @Plugin(
         id = "nordqueue",
         name = "NordQueue",
-        version = "1.1.3",
+        version = "1.1.4",
         description = "Lightweight queue and backend failover for Nord Fjell",
         authors = {"Nord Fjell"}
 )
@@ -70,11 +68,12 @@ public final class NordQueuePlugin {
     private final QueueState<Player> queueState = new QueueState<>();
     private final Object taskLock = new Object();
     private final ConcurrentHashMap<QueueState.Attempt<Player>, ScheduledTask> attemptTimeouts = new ConcurrentHashMap<>();
-    private volatile PriorityPlayers priorityPlayers = new PriorityPlayers(Set.of(), Set.of());
+    private final Object priorityUpdateLock = new Object();
+    private final PriorityPlayerStore priorityStore;
+    private volatile PriorityPlayerStore.Snapshot priorityPlayers =
+            new PriorityPlayerStore.Snapshot(java.util.Set.of(), java.util.Set.of());
     private volatile long taskGeneration;
     private volatile boolean stopping;
-
-    private record PriorityPlayers(Set<UUID> uuids, Set<String> names) { }
 
     private volatile Settings settings = Settings.defaults();
     private ScheduledTask displayTask;
@@ -89,6 +88,7 @@ public final class NordQueuePlugin {
         this.proxy = proxy;
         this.logger = logger;
         this.dataDirectory = dataDirectory;
+        this.priorityStore = new PriorityPlayerStore(dataDirectory.resolve("priority-players.txt"));
     }
 
     @Subscribe
@@ -327,9 +327,9 @@ public final class NordQueuePlugin {
     }
 
     private boolean isPriorityPlayer(Player player) {
-        PriorityPlayers priorities = priorityPlayers;
-        return priorities.uuids.contains(player.getUniqueId())
-                || priorities.names.contains(player.getUsername().toLowerCase(Locale.ROOT));
+        PriorityPlayerStore.Snapshot priorities = priorityPlayers;
+        return priorities.uuids().contains(player.getUniqueId())
+                || priorities.names().contains(player.getUsername().toLowerCase(Locale.ROOT));
     }
 
     private void remove(Player player) { queueState.removeQueued(session(player)); }
@@ -611,35 +611,18 @@ public final class NordQueuePlugin {
                     || !loaded.queueServer.equalsIgnoreCase(settings.queueServer)) && !proxy.getAllPlayers().isEmpty()) {
                 throw new IllegalArgumentException("Changing server names with connected players requires a proxy restart");
             }
-            PriorityPlayers priorities = loadPriorityPlayers();
-            synchronized (taskLock) {
-                settings = loaded;
-                priorityPlayers = priorities;
-                queueState.rebalance(this::isPriorityPlayer);
+            synchronized (priorityUpdateLock) {
+                PriorityPlayerStore.Snapshot priorities = priorityStore.load();
+                synchronized (taskLock) {
+                    settings = loaded;
+                    priorityPlayers = priorities;
+                    queueState.rebalance(this::isPriorityPlayer);
+                }
+                logger.info("Loaded {} priority player entries", priorities.size());
             }
         } catch (IOException | RuntimeException exception) {
             logger.error("Could not load NordQueue configuration; keeping previous settings", exception);
         }
-    }
-
-    private PriorityPlayers loadPriorityPlayers() throws IOException {
-        Path file = dataDirectory.resolve("priority-players.txt");
-        if (!Files.exists(file)) {
-            Files.writeString(file,
-                    "# NordQueue priority players\n"
-                            + "# One Minecraft username or UUID per line. Lines starting with # are ignored.\n",
-                    StandardCharsets.UTF_8);
-        }
-        Set<UUID> uuids = new HashSet<>();
-        Set<String> names = new HashSet<>();
-        for (String sourceLine : Files.readAllLines(file, StandardCharsets.UTF_8)) {
-            String line = sourceLine.trim();
-            if (line.isEmpty() || line.startsWith("#")) continue;
-            try { uuids.add(UUID.fromString(line)); }
-            catch (IllegalArgumentException ignored) { names.add(line.toLowerCase(Locale.ROOT)); }
-        }
-        logger.info("Loaded {} priority player entries", uuids.size() + names.size());
-        return new PriorityPlayers(Set.copyOf(uuids), Set.copyOf(names));
     }
 
     private static void putDefault(Properties properties, String key, String value) {
@@ -686,9 +669,63 @@ public final class NordQueuePlugin {
                 invocation.source().sendRichMessage("<green>NordQueue reloaded.</green>");
                 return;
             }
+            if (arguments.length == 3 && arguments[0].equalsIgnoreCase("priority")) {
+                managePriority(invocation.source(), arguments[1], arguments[2]);
+                return;
+            }
             invocation.source().sendRichMessage("<gold>NordQueue:</gold> <yellow>" + regularQueueSize()
                     + "</yellow> regular, <yellow>" + priorityQueueSize()
-                    + "</yellow> priority. <gray>Use /nordqueue reload</gray>");
+                    + "</yellow> priority. <gray>Use /nordqueue reload or "
+                    + "/nordqueue priority &lt;add|remove|status&gt; &lt;username|uuid&gt;</gray>");
+        }
+
+        private void managePriority(CommandSource source, String action, String identity) {
+            final String normalized;
+            try {
+                normalized = PriorityPlayerStore.normalize(identity);
+            } catch (IllegalArgumentException exception) {
+                source.sendPlainMessage("Invalid identity: " + exception.getMessage() + ".");
+                return;
+            }
+            proxy.getScheduler().buildTask(NordQueuePlugin.this,
+                    () -> updatePriority(source, action.toLowerCase(Locale.ROOT), normalized)).schedule();
+        }
+    }
+
+    private void updatePriority(CommandSource source, String action, String identity) {
+        try {
+            synchronized (priorityUpdateLock) {
+                if (action.equals("status")) {
+                    boolean priority = priorityPlayers.contains(identity);
+                    source.sendPlainMessage(priority
+                            ? identity + " has priority."
+                            : identity + " does not have priority.");
+                    return;
+                }
+
+                PriorityPlayerStore.Update update;
+                if (action.equals("add")) update = priorityStore.add(identity);
+                else if (action.equals("remove")) update = priorityStore.remove(identity);
+                else {
+                    source.sendRichMessage("<red>Unknown action.</red> <gray>Use add, remove, or status.</gray>");
+                    return;
+                }
+
+                priorityPlayers = update.snapshot();
+                queueState.rebalance(this::isPriorityPlayer);
+                if (action.equals("add")) {
+                    source.sendPlainMessage(update.changed()
+                            ? "Priority added for " + identity + "."
+                            : identity + " already has priority.");
+                } else {
+                    source.sendPlainMessage(update.changed()
+                            ? "Priority removed for " + identity + "."
+                            : identity + " did not have priority.");
+                }
+            }
+        } catch (IOException | RuntimeException exception) {
+            logger.error("Could not {} priority for {}", action, identity, exception);
+            source.sendRichMessage("<red>Could not update priority. The previous roster is still active.</red>");
         }
     }
 
