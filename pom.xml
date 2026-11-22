@@ -4,7 +4,7 @@
   <modelVersion>4.0.0</modelVersion>
   <groupId>dev.nordfjell</groupId>
   <artifactId>nordqueue</artifactId>
-  <version>1.1.4</version>
+  <version>1.2.0</version>
   <name>NordQueue</name>
   <properties>
     <maven.compiler.release>25</maven.compiler.release>
@@ -17,6 +17,7 @@
   <dependencies>
     <dependency><groupId>com.velocitypowered</groupId><artifactId>velocity-api</artifactId><version>4.2.1-20260929.213356-5</version><scope>provided</scope></dependency>
     <dependency><groupId>org.junit.jupiter</groupId><artifactId>junit-jupiter</artifactId><version>5.12.2</version><scope>test</scope></dependency>
+    <dependency><groupId>org.xerial</groupId><artifactId>sqlite-jdbc</artifactId><version>3.49.1.0</version></dependency>
   </dependencies>
   <build>
     <finalName>NordQueue-${project.version}</finalName>
@@ -40,6 +41,14 @@
         <configuration><useModulePath>false</useModulePath><enableAssertions>true</enableAssertions></configuration>
       </plugin>
       <plugin><groupId>org.apache.maven.plugins</groupId><artifactId>maven-jar-plugin</artifactId><version>3.4.2</version></plugin>
+      <plugin>
+        <groupId>org.apache.maven.plugins</groupId><artifactId>maven-shade-plugin</artifactId><version>3.6.1</version>
+        <executions><execution><phase>package</phase><goals><goal>shade</goal></goals><configuration>
+          <createDependencyReducedPom>false</createDependencyReducedPom>
+          <shadedArtifactAttached>false</shadedArtifactAttached>
+          <transformers><transformer implementation="org.apache.maven.plugins.shade.resource.ServicesResourceTransformer"/></transformers>
+        </configuration></execution></executions>
+      </plugin>
     </plugins>
   </build>
 </project>

@@ -32,7 +32,7 @@ final class PriorityPlayerStoreTest {
     }
 
     @Test
-    void uuidAndCommentsSurviveMutations() throws Exception {
+    void legacyRosterMigratesOnceAndRemainsUntouched() throws Exception {
         Path file = temporaryDirectory.resolve("priority-players.txt");
         UUID uuid = UUID.randomUUID();
         Files.writeString(file, "# custom note\n" + uuid + "\n", StandardCharsets.UTF_8);
@@ -40,9 +40,13 @@ final class PriorityPlayerStoreTest {
 
         assertTrue(store.add("Bedrock.Player").changed());
         assertEquals(2, store.load().size());
-        assertTrue(Files.readString(file, StandardCharsets.UTF_8).contains("# custom note"));
+        String legacy = Files.readString(file, StandardCharsets.UTF_8);
+        assertTrue(legacy.contains("# custom note"));
         assertTrue(store.remove(uuid.toString()).changed());
         assertTrue(store.load().contains("bedrock.player"));
+        assertEquals(legacy, Files.readString(file, StandardCharsets.UTF_8));
+        Files.writeString(file, legacy + "LateLegacyPlayer\n", StandardCharsets.UTF_8);
+        assertFalse(store.load().contains("latelegacyplayer"));
     }
 
     @Test

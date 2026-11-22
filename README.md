@@ -6,7 +6,7 @@ A title repeats while they wait. Backend-restart kicks return players to the que
 
 ## Priority and suspended players
 
-List priority players in `plugins/nordqueue/priority-players.txt`, one username or UUID per line. Priority players have their own FIFO queue and transfer before eligible regular players.
+Priority players are stored in indexed SQLite at `plugins/nordqueue/priority.db`. Version 1.2.0 imports the existing `priority-players.txt` exactly once in a transaction; the text file can be removed after the imported row count is verified. Priority players have their own FIFO queue and transfer before eligible regular players.
 
 The server-list player hover shows counts for the main server, regular queue and priority queue.
 
@@ -35,7 +35,7 @@ the Velocity proxy; NordQueue does not store a Tebex secret or depend on Tebex.
 
 Player access comes from Velocity's permission provider; NordQueue registers no default player grant for its admin node. Backend-only permissions do not grant proxy rights.
 
-`/queue` and `/qposition` have no dedicated permission node and are player-only. Priority comes from `priority-players.txt`, not a permission node. Review offline-mode identity trust before assigning priority by name or UUID.
+`/queue` and `/qposition` have no dedicated permission node and are player-only. Priority comes from `priority.db`, not a permission node. Review offline-mode identity trust before assigning priority by name or UUID.
 
 ## 1.1.2 ban receiver storage
 
