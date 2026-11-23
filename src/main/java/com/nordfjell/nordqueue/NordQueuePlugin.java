@@ -8,7 +8,6 @@ import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
-import com.velocitypowered.api.event.connection.PluginMessageEvent;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
 import com.velocitypowered.api.event.player.ServerPostConnectEvent;
 import com.velocitypowered.api.event.player.ServerPreConnectEvent;
@@ -20,7 +19,6 @@ import com.velocitypowered.api.plugin.annotation.DataDirectory;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.ProxyServer;
-import com.velocitypowered.api.proxy.messages.MinecraftChannelIdentifier;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
 import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.ServerPing;
@@ -47,19 +45,18 @@ import java.util.Properties;
 import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
 @Plugin(
         id = "nordqueue",
         name = "NordQueue",
-        version = "1.2.0",
+        version = "1.3.0",
         description = "Lightweight queue and backend failover for Nord Fjell",
         authors = {"Nord Fjell"}
 )
 public final class NordQueuePlugin {
-    private static final MinecraftChannelIdentifier BAN_CHANNEL =
-            MinecraftChannelIdentifier.from(BanProtocol.CHANNEL);
     private final ProxyServer proxy;
     private final Logger logger;
     private final Path dataDirectory;
@@ -78,10 +75,12 @@ public final class NordQueuePlugin {
     private volatile Settings settings = Settings.defaults();
     private ScheduledTask displayTask;
     private ScheduledTask transferTask;
-    private SuspendedBanStore suspendedBanStore;
-    private BanInbox banInbox;
-    private ScheduledExecutorService banWriter;
+    private volatile BanDatabaseReader banReader;
+    private ScheduledExecutorService banReaderWorker;
+    private QueueNoticeFeature notices;
+    private QueueTabFeature queueTab;
     private String reportedBanProblem = "";
+    private final AtomicBoolean settingsReloadPending = new AtomicBoolean();
 
     @Inject
     public NordQueuePlugin(ProxyServer proxy, Logger logger, @DataDirectory Path dataDirectory) {
@@ -93,20 +92,13 @@ public final class NordQueuePlugin {
 
     @Subscribe
     public void onProxyInitialize(ProxyInitializeEvent event) {
-        suspendedBanStore = new SuspendedBanStore(dataDirectory.resolve("suspended-bans.properties"));
-        try {
-            suspendedBanStore.load();
-            banInbox = new BanInbox(suspendedBanStore,4096,256);
-            banWriter = Executors.newSingleThreadScheduledExecutor(task -> {
-                Thread thread=new Thread(task,"NordQueue-ban-storage");thread.setDaemon(true);return thread;
-            });
-            banWriter.scheduleWithFixedDelay(() -> banInbox.flush(System.nanoTime()),100,100,TimeUnit.MILLISECONDS);
-        } catch (IOException exception) {
-            logger.error("Ban storage failed strict initialization; main admission stays closed. Repair storage and restart the proxy. Error: {}",
-                    exception.getClass().getSimpleName());
-        }
-        proxy.getChannelRegistrar().register(BAN_CHANNEL);
         reloadSettings();
+        configureBanReader();
+        migrateFeatureConfig("nordqueuenotice",dataDirectory.resolve("notice.properties"));
+        migrateFeatureConfig("nordqueuetab",dataDirectory.resolve("tab.properties"));
+        notices=new QueueNoticeFeature(this,proxy,logger,dataDirectory.resolve("notice.properties"));
+        queueTab=new QueueTabFeature(this,proxy,logger,dataDirectory.resolve("tab.properties"));
+        notices.start();queueTab.start();
         registerCommands();
         startTasks();
         logger.info("NordQueue enabled: {} -> {}", settings.queueServer, settings.mainServer);
@@ -120,6 +112,8 @@ public final class NordQueuePlugin {
 
     @Subscribe
     public void onDisconnect(DisconnectEvent event) {
+        if(notices!=null)notices.disconnected(event.getPlayer());
+        if(queueTab!=null)queueTab.disconnected(event.getPlayer());
         synchronized (queueState) {
             QueueState.Attempt<Player> attempt = queueState.pending();
             if (queueState.end(event.getPlayer().getUniqueId(), event.getPlayer())
@@ -137,24 +131,11 @@ public final class NordQueuePlugin {
             queueState.close();
             attemptTimeouts.values().forEach(ScheduledTask::cancel);
             attemptTimeouts.clear();
-            if(banInbox!=null)banInbox.close();
-            if(banWriter!=null)banWriter.shutdownNow();
+            if(notices!=null)notices.stop();
+            if(queueTab!=null)queueTab.stop();
+            BanDatabaseReader reader=banReader;if(reader!=null)reader.close();
+            if(banReaderWorker!=null)banReaderWorker.shutdownNow();
         }
-    }
-
-    @Subscribe
-    public void onPluginMessage(PluginMessageEvent event) {
-        if (!event.getIdentifier().equals(BAN_CHANNEL)) return;
-        event.setResult(PluginMessageEvent.ForwardResult.handled());
-        if (!(event.getSource() instanceof ServerConnection connection)
-                || !connection.getServerInfo().getName().equalsIgnoreCase(settings.mainServer)) {
-            logger.warn("Rejected NordBans sync from an untrusted source");
-            return;
-        }
-        BanProtocol.decodeSync(event.getData()).ifPresentOrElse(message -> {
-            if (message.action().equals("BAN")) applyBan(message.ban());
-            else removeBan(message.ban().playerName());
-        }, () -> logger.warn("Rejected malformed NordBans sync payload"));
     }
 
     @Subscribe
@@ -162,21 +143,6 @@ public final class NordQueuePlugin {
         if (!event.getServer().getServerInfo().getName().equalsIgnoreCase(settings.mainServer)) return;
         if (!isCurrent(event.getPlayer())) return;
         String reason = event.getServerKickReason().map(plainText::serialize).orElse("");
-        Optional<SuspendedBan> protocolBan = BanProtocol.decodeKick(event.getPlayer().getUsername(), reason);
-        if (protocolBan.isPresent()) {
-            SuspendedBan ban = protocolBan.get();
-            applyBan(ban);
-            Optional<RegisteredServer> queueServer = proxy.getServer(settings.queueServer);
-            Component message = banMessage(ban);
-            if (queueServer.isEmpty()) {
-                event.setResult(KickedFromServerEvent.DisconnectPlayer.create(message));
-            } else if (isOnServer(event.getPlayer(), settings.queueServer)) {
-                event.setResult(KickedFromServerEvent.Notify.create(message));
-            } else {
-                event.setResult(KickedFromServerEvent.RedirectPlayer.create(queueServer.get(), message));
-            }
-            return;
-        }
         if (AuthenticationDisconnects.terminal(reason)) {
             remove(event.getPlayer());
             Component message = event.getServerKickReason().orElseGet(() ->
@@ -201,6 +167,8 @@ public final class NordQueuePlugin {
         Player player = event.getPlayer();
         if (!isCurrent(player)) return;
         String current = currentServerName(player).orElse("");
+        if(notices!=null)notices.connected(player);
+        if(queueTab!=null)queueTab.connected(player,current.equalsIgnoreCase(settings.queueServer));
         if (current.equalsIgnoreCase(settings.queueServer)) {
             Optional<SuspendedBan> ban = activeBan(player);
             if (ban.isPresent()) {
@@ -466,42 +434,28 @@ public final class NordQueuePlugin {
     }
 
     private Optional<SuspendedBan> activeBan(Player player) {
-        return banInbox == null ? Optional.empty() : banInbox.active(player.getUsername());
+        BanDatabaseReader reader=banReader;
+        return reader == null ? Optional.empty() : reader.active(player.getUsername());
     }
 
-    private boolean banAdmissionReady(){return banInbox!=null && banInbox.ready();}
-
-    private void applyBan(SuspendedBan ban) {
-        if (!ban.active(System.currentTimeMillis())) {
-            removeBan(ban.playerName());
-            return;
-        }
-        if(banInbox==null || !banInbox.offer(new BanInbox.Change(ban.playerName(),ban))) {
-            logger.error("Ban inbox unavailable/overloaded; main admission remains closed. Restart and resynchronize before admitting players.");
-            return;
-        }
-        proxy.getPlayer(ban.playerName()).ifPresent(player -> {
-            remove(player);
-            queueState.clearBanNotice(session(player));
-            if (isOnServer(player, settings.queueServer)) showBanNotice(player, ban);
-        });
-    }
-
-    private void removeBan(String playerName) {
-        if(banInbox==null || !banInbox.offer(new BanInbox.Change(playerName,null)))
-            logger.error("Unban inbox unavailable/overloaded; main admission remains closed. Restart and resynchronize before admitting players.");
-    }
+    private boolean banAdmissionReady(){BanDatabaseReader reader=banReader;return reader==null||reader.ready();}
 
     private void releaseExpiredBans() {
-        String problem=banInbox==null ? "initialization-failed" : banInbox.problem();
+        BanDatabaseReader reader=banReader;String problem=reader==null ? "" : reader.problem();
         if(!problem.equals(reportedBanProblem)) {
-            if(problem.isEmpty())logger.info("Ban storage recovered; pending synchronization must finish before main admission.");
-            else logger.error("Ban storage unavailable ({}); main admission is closed. I/O failures retry every five seconds; overflow requires restart/resynchronization.",problem);
+            if(problem.isEmpty())logger.info("NordBans database reader recovered; main admission is available.");
+            else logger.error("NordBans database unavailable ({}); main admission is closed.",problem);
             reportedBanProblem=problem;
         }
-        if(banInbox==null)return;
         for(Player player:proxy.getAllPlayers()) {
-            if(!isCurrent(player) || activeBan(player).isPresent() || !queueState.hasBanNotice(session(player)))continue;
+            if(!isCurrent(player))continue;
+            Optional<SuspendedBan> active=activeBan(player);
+            if(active.isPresent()){
+                remove(player);showBanNotice(player,active.get());
+                if(isOnServer(player,settings.mainServer))proxy.getServer(settings.queueServer).ifPresent(queue->player.createConnectionRequest(queue).fireAndForget());
+                continue;
+            }
+            if(!queueState.hasBanNotice(session(player)))continue;
             // Use the exact active connection, not a name lookup that can target a replacement session.
             synchronized(queueState) {
                 if(!isCurrent(player) || activeBan(player).isPresent())continue;
@@ -566,7 +520,7 @@ public final class NordQueuePlugin {
         proxy.getCommandManager().register(adminMeta, new AdminCommand());
     }
 
-    private void reloadSettings() {
+    private boolean reloadSettings() {
         try {
             Files.createDirectories(dataDirectory);
             Path config = dataDirectory.resolve("config.properties");
@@ -599,6 +553,7 @@ public final class NordQueuePlugin {
             putDefault(properties, "ban-subtitle", defaults.banSubtitle);
             putDefault(properties, "ban-message", defaults.banMessage);
             putDefault(properties, "ban-expired-message", defaults.banExpiredMessage);
+            putDefault(properties, "nordbans-database-path", defaults.nordBansDatabasePath);
             try (OutputStream output = Files.newOutputStream(config)) {
                 properties.store(output, "NordQueue configuration. MiniMessage formatting is supported.");
             }
@@ -620,9 +575,24 @@ public final class NordQueuePlugin {
                 }
                 logger.info("Loaded {} priority player entries", priorities.size());
             }
+            return true;
         } catch (IOException | RuntimeException exception) {
             logger.error("Could not load NordQueue configuration; keeping previous settings", exception);
+            return false;
         }
+    }
+
+    private void configureBanReader(){
+        String configured=settings.nordBansDatabasePath.trim();
+        BanDatabaseReader previous=banReader;
+        if(configured.isEmpty()){banReader=null;if(previous!=null)previous.close();return;}
+        Path path=Path.of(configured);if(!path.isAbsolute())path=dataDirectory.resolve(path).normalize();
+        BanDatabaseReader next=new BanDatabaseReader(path);next.refresh();banReader=next;if(previous!=null)previous.close();
+        if(banReaderWorker==null){banReaderWorker=Executors.newSingleThreadScheduledExecutor(task->{Thread thread=new Thread(task,"NordQueue-ban-reader");thread.setDaemon(true);return thread;});banReaderWorker.scheduleWithFixedDelay(()->{BanDatabaseReader active=banReader;if(active!=null)active.refresh();},250,250,TimeUnit.MILLISECONDS);}
+    }
+    private void migrateFeatureConfig(String oldDirectory,Path target){
+        try{if(Files.exists(target))return;Path old=dataDirectory.getParent().resolve(oldDirectory).resolve("config.properties");if(Files.isRegularFile(old)){Files.createDirectories(target.getParent());Files.copy(old,target);logger.info("Migrated {} to {}",old.getFileName(),target.getFileName());}}
+        catch(IOException e){logger.error("Could not migrate {} configuration",oldDirectory,e);}
     }
 
     private static void putDefault(Properties properties, String key, String value) {
@@ -664,11 +634,12 @@ public final class NordQueuePlugin {
         public void execute(Invocation invocation) {
             String[] arguments = invocation.arguments();
             if (arguments.length == 1 && arguments[0].equalsIgnoreCase("reload")) {
-                reloadSettings();
-                startTasks();
-                invocation.source().sendRichMessage("<green>NordQueue reloaded.</green>");
+                queueReload(invocation.source(),true);
                 return;
             }
+            if(arguments.length==2&&arguments[0].equalsIgnoreCase("notice")&&arguments[1].equalsIgnoreCase("reload")){invocation.source().sendPlainMessage(notices!=null&&notices.reload(invocation.source())?"Notice reload queued.":"Notice reload unavailable.");return;}
+            if(arguments.length==2&&arguments[0].equalsIgnoreCase("tab")&&arguments[1].equalsIgnoreCase("reload")){queueReload(invocation.source(),false);return;}
+            if(arguments.length==1&&arguments[0].equalsIgnoreCase("health")){invocation.source().sendPlainMessage((notices==null?"notices=unavailable":notices.health())+"; "+(queueTab==null?"tab=unavailable":queueTab.health())+"; bans="+(banReader==null?"disabled":banReader.problem().isEmpty()?"ready":banReader.problem()));return;}
             if (arguments.length == 3 && arguments[0].equalsIgnoreCase("priority")) {
                 managePriority(invocation.source(), arguments[1], arguments[2]);
                 return;
@@ -677,6 +648,22 @@ public final class NordQueuePlugin {
                     + "</yellow> regular, <yellow>" + priorityQueueSize()
                     + "</yellow> priority. <gray>Use /nordqueue reload or "
                     + "/nordqueue priority &lt;add|remove|status&gt; &lt;username|uuid&gt;</gray>");
+        }
+
+        private void queueReload(CommandSource source,boolean all){
+            if(!settingsReloadPending.compareAndSet(false,true)){source.sendPlainMessage("NordQueue reload is already pending.");return;}
+            source.sendPlainMessage("NordQueue reload queued.");
+            proxy.getScheduler().buildTask(NordQueuePlugin.this,()->{
+                boolean ok;
+                try{
+                    if(all){ok=reloadSettings();if(ok){configureBanReader();startTasks();}}
+                    else ok=true;
+                    if(ok&&queueTab!=null)ok=queueTab.reload();
+                    if(ok&&all&&notices!=null&&!notices.reload(source))ok=false;
+                    source.sendPlainMessage(ok?"NordQueue configuration reloaded.":"NordQueue reload rejected; previous settings retained.");
+                }catch(RuntimeException error){logger.error("NordQueue reload failed",error);source.sendPlainMessage("NordQueue reload failed; previous settings retained.");}
+                finally{settingsReloadPending.set(false);}
+            }).schedule();
         }
 
         private void managePriority(CommandSource source, String action, String identity) {
@@ -751,7 +738,8 @@ public final class NordQueuePlugin {
             String banTitle,
             String banSubtitle,
             String banMessage,
-            String banExpiredMessage
+            String banExpiredMessage,
+            String nordBansDatabasePath
     ) {
         private static Settings defaults() {
             return new Settings(
@@ -768,7 +756,8 @@ public final class NordQueuePlugin {
                     "<red>Temporarily banned</red>",
                     "<gray><reason> • <remaining> remaining</gray>",
                     "<red>You are temporarily banned.</red><newline><gray>Reason: <white><reason></white></gray><newline><gray>Remaining: <white><remaining></white></gray>",
-                    "<green>Your temporary ban has expired. You joined the end of the queue.</green>"
+                    "<green>Your temporary ban has expired. You joined the end of the queue.</green>",
+                    ""
             );
         }
 
@@ -796,7 +785,8 @@ public final class NordQueuePlugin {
                     p.getProperty("ban-title", d.banTitle),
                     p.getProperty("ban-subtitle", d.banSubtitle),
                     p.getProperty("ban-message", d.banMessage),
-                    p.getProperty("ban-expired-message", d.banExpiredMessage)
+                    p.getProperty("ban-expired-message", d.banExpiredMessage),
+                    p.getProperty("nordbans-database-path", d.nordBansDatabasePath)
             );
         }
 
