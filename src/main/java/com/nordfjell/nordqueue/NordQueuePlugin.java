@@ -52,7 +52,7 @@ import java.util.concurrent.ScheduledExecutorService;
 @Plugin(
         id = "nordqueue",
         name = "NordQueue",
-        version = "1.3.0",
+        version = "1.4.0",
         description = "Lightweight queue and backend failover for Nord Fjell",
         authors = {"Nord Fjell"}
 )
@@ -79,6 +79,7 @@ public final class NordQueuePlugin {
     private ScheduledExecutorService banReaderWorker;
     private QueueNoticeFeature notices;
     private QueueTabFeature queueTab;
+    private PingFeature pingFeature;
     private String reportedBanProblem = "";
     private final AtomicBoolean settingsReloadPending = new AtomicBoolean();
 
@@ -96,9 +97,11 @@ public final class NordQueuePlugin {
         configureBanReader();
         migrateFeatureConfig("nordqueuenotice",dataDirectory.resolve("notice.properties"));
         migrateFeatureConfig("nordqueuetab",dataDirectory.resolve("tab.properties"));
+        migrateFeatureConfig("nordping",dataDirectory.resolve("ping.properties"));
         notices=new QueueNoticeFeature(this,proxy,logger,dataDirectory.resolve("notice.properties"));
         queueTab=new QueueTabFeature(this,proxy,logger,dataDirectory.resolve("tab.properties"));
         notices.start();queueTab.start();
+        pingFeature=new PingFeature(this,proxy,logger,dataDirectory.resolve("ping.properties"));pingFeature.start();
         registerCommands();
         startTasks();
         logger.info("NordQueue enabled: {} -> {}", settings.queueServer, settings.mainServer);
@@ -133,6 +136,7 @@ public final class NordQueuePlugin {
             attemptTimeouts.clear();
             if(notices!=null)notices.stop();
             if(queueTab!=null)queueTab.stop();
+        if(pingFeature!=null)pingFeature.stop();
             BanDatabaseReader reader=banReader;if(reader!=null)reader.close();
             if(banReaderWorker!=null)banReaderWorker.shutdownNow();
         }
@@ -639,7 +643,8 @@ public final class NordQueuePlugin {
             }
             if(arguments.length==2&&arguments[0].equalsIgnoreCase("notice")&&arguments[1].equalsIgnoreCase("reload")){invocation.source().sendPlainMessage(notices!=null&&notices.reload(invocation.source())?"Notice reload queued.":"Notice reload unavailable.");return;}
             if(arguments.length==2&&arguments[0].equalsIgnoreCase("tab")&&arguments[1].equalsIgnoreCase("reload")){queueReload(invocation.source(),false);return;}
-            if(arguments.length==1&&arguments[0].equalsIgnoreCase("health")){invocation.source().sendPlainMessage((notices==null?"notices=unavailable":notices.health())+"; "+(queueTab==null?"tab=unavailable":queueTab.health())+"; bans="+(banReader==null?"disabled":banReader.problem().isEmpty()?"ready":banReader.problem()));return;}
+            if(arguments.length==2&&arguments[0].equalsIgnoreCase("ping")&&arguments[1].equalsIgnoreCase("reload")){invocation.source().sendPlainMessage(pingFeature!=null&&pingFeature.reload(invocation.source())?"Ping reload queued.":"Ping reload unavailable or already pending.");return;}
+            if(arguments.length==1&&arguments[0].equalsIgnoreCase("health")){invocation.source().sendPlainMessage((notices==null?"notices=unavailable":notices.health())+"; "+(queueTab==null?"tab=unavailable":queueTab.health())+"; "+(pingFeature==null?"ping=unavailable":pingFeature.health())+"; bans="+(banReader==null?"disabled":banReader.problem().isEmpty()?"ready":banReader.problem()));return;}
             if (arguments.length == 3 && arguments[0].equalsIgnoreCase("priority")) {
                 managePriority(invocation.source(), arguments[1], arguments[2]);
                 return;
