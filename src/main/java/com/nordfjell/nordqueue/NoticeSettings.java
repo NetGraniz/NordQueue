@@ -9,7 +9,7 @@ import java.nio.file.*;
 import java.util.*;
 import java.util.concurrent.TimeUnit;
 
-/** Bounded legacy Properties reader. Existing files are never rewritten. */
+/** Bounded reader for the current notice configuration. */
 record NoticeSettings(long intervalSeconds, long initialDelayMillis, int clearLines,
                       Component frame, int serializedBytes) {
     static final int MAX_FILE = 65536, MAX_MESSAGE = 8192;
@@ -28,7 +28,7 @@ record NoticeSettings(long intervalSeconds, long initialDelayMillis, int clearLi
             defaults.setProperty("clear-lines", "40");
             defaults.setProperty("message", DEFAULT_MESSAGE);
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
-            defaults.store(bytes, "NordQueueNotice configuration. MiniMessage formatting is supported.");
+            defaults.store(bytes, "NordQueue notice configuration. MiniMessage formatting is supported.");
             try { Files.write(config, bytes.toByteArray(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE); }
             catch (FileAlreadyExistsException concurrentCreation) { /* Load, never replace. */ }
         }

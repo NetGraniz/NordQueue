@@ -5,7 +5,6 @@ import com.velocitypowered.api.command.CommandMeta;
 import com.velocitypowered.api.command.CommandSource;
 import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
-import com.velocitypowered.api.event.PostOrder;
 import com.velocitypowered.api.event.connection.DisconnectEvent;
 import com.velocitypowered.api.event.connection.PostLoginEvent;
 import com.velocitypowered.api.event.player.KickedFromServerEvent;
@@ -52,7 +51,7 @@ import java.util.concurrent.ScheduledExecutorService;
 @Plugin(
         id = "nordqueue",
         name = "NordQueue",
-        version = "1.4.0",
+        version = "2.0.0",
         description = "Lightweight queue and backend failover for Nord Fjell",
         authors = {"Nord Fjell"}
 )
@@ -88,16 +87,13 @@ public final class NordQueuePlugin {
         this.proxy = proxy;
         this.logger = logger;
         this.dataDirectory = dataDirectory;
-        this.priorityStore = new PriorityPlayerStore(dataDirectory.resolve("priority-players.txt"));
+        this.priorityStore = new PriorityPlayerStore(dataDirectory.resolve("priority.db"));
     }
 
     @Subscribe
     public void onProxyInitialize(ProxyInitializeEvent event) {
         reloadSettings();
         configureBanReader();
-        migrateFeatureConfig("nordqueuenotice",dataDirectory.resolve("notice.properties"));
-        migrateFeatureConfig("nordqueuetab",dataDirectory.resolve("tab.properties"));
-        migrateFeatureConfig("nordping",dataDirectory.resolve("ping.properties"));
         notices=new QueueNoticeFeature(this,proxy,logger,dataDirectory.resolve("notice.properties"));
         queueTab=new QueueTabFeature(this,proxy,logger,dataDirectory.resolve("tab.properties"));
         notices.start();queueTab.start();
@@ -194,7 +190,7 @@ public final class NordQueuePlugin {
         }
     }
 
-    @Subscribe(order = PostOrder.LAST)
+    @Subscribe(priority = Short.MIN_VALUE)
     public void onServerPreConnect(ServerPreConnectEvent event) {
         Optional<RegisteredServer> destination = event.getResult().getServer();
         if (destination.isEmpty() || !destination.get().getServerInfo().getName().equalsIgnoreCase(settings.mainServer)) return;
@@ -594,11 +590,6 @@ public final class NordQueuePlugin {
         BanDatabaseReader next=new BanDatabaseReader(path);next.refresh();banReader=next;if(previous!=null)previous.close();
         if(banReaderWorker==null){banReaderWorker=Executors.newSingleThreadScheduledExecutor(task->{Thread thread=new Thread(task,"NordQueue-ban-reader");thread.setDaemon(true);return thread;});banReaderWorker.scheduleWithFixedDelay(()->{BanDatabaseReader active=banReader;if(active!=null)active.refresh();},250,250,TimeUnit.MILLISECONDS);}
     }
-    private void migrateFeatureConfig(String oldDirectory,Path target){
-        try{if(Files.exists(target))return;Path old=dataDirectory.getParent().resolve(oldDirectory).resolve("config.properties");if(Files.isRegularFile(old)){Files.createDirectories(target.getParent());Files.copy(old,target);logger.info("Migrated {} to {}",old.getFileName(),target.getFileName());}}
-        catch(IOException e){logger.error("Could not migrate {} configuration",oldDirectory,e);}
-    }
-
     private static void putDefault(Properties properties, String key, String value) {
         properties.putIfAbsent(key, value);
     }
@@ -641,9 +632,6 @@ public final class NordQueuePlugin {
                 queueReload(invocation.source(),true);
                 return;
             }
-            if(arguments.length==2&&arguments[0].equalsIgnoreCase("notice")&&arguments[1].equalsIgnoreCase("reload")){invocation.source().sendPlainMessage(notices!=null&&notices.reload(invocation.source())?"Notice reload queued.":"Notice reload unavailable.");return;}
-            if(arguments.length==2&&arguments[0].equalsIgnoreCase("tab")&&arguments[1].equalsIgnoreCase("reload")){queueReload(invocation.source(),false);return;}
-            if(arguments.length==2&&arguments[0].equalsIgnoreCase("ping")&&arguments[1].equalsIgnoreCase("reload")){invocation.source().sendPlainMessage(pingFeature!=null&&pingFeature.reload(invocation.source())?"Ping reload queued.":"Ping reload unavailable or already pending.");return;}
             if(arguments.length==1&&arguments[0].equalsIgnoreCase("health")){invocation.source().sendPlainMessage((notices==null?"notices=unavailable":notices.health())+"; "+(queueTab==null?"tab=unavailable":queueTab.health())+"; "+(pingFeature==null?"ping=unavailable":pingFeature.health())+"; bans="+(banReader==null?"disabled":banReader.problem().isEmpty()?"ready":banReader.problem()));return;}
             if (arguments.length == 3 && arguments[0].equalsIgnoreCase("priority")) {
                 managePriority(invocation.source(), arguments[1], arguments[2]);
@@ -665,6 +653,7 @@ public final class NordQueuePlugin {
                     else ok=true;
                     if(ok&&queueTab!=null)ok=queueTab.reload();
                     if(ok&&all&&notices!=null&&!notices.reload(source))ok=false;
+                    if(ok&&all&&pingFeature!=null&&!pingFeature.reload(source))ok=false;
                     source.sendPlainMessage(ok?"NordQueue configuration reloaded.":"NordQueue reload rejected; previous settings retained.");
                 }catch(RuntimeException error){logger.error("NordQueue reload failed",error);source.sendPlainMessage("NordQueue reload failed; previous settings retained.");}
                 finally{settingsReloadPending.set(false);}

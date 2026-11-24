@@ -1,16 +1,13 @@
 package com.nordfjell.nordqueue;
 
 import java.io.IOException;
-import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.sql.*;
 import java.util.*;
 
-/** SQLite-backed priority roster with one-time text-file migration. */
+/** SQLite-backed priority roster. */
 final class PriorityPlayerStore {
-    private static final String MIGRATION_KEY = "priority_text_v1";
-
     record Snapshot(Set<UUID> uuids, Set<String> names) {
         boolean contains(String identity) {
             String normalized = normalize(identity);
@@ -21,18 +18,15 @@ final class PriorityPlayerStore {
     }
     record Update(Snapshot snapshot, boolean changed) { }
 
-    private final Path legacyFile;
     private final Path databaseFile;
 
-    PriorityPlayerStore(Path legacyFile) {
-        this.legacyFile = legacyFile.toAbsolutePath().normalize();
-        this.databaseFile = this.legacyFile.resolveSibling("priority.db");
+    PriorityPlayerStore(Path databaseFile) {
+        this.databaseFile = databaseFile.toAbsolutePath().normalize();
     }
 
     synchronized Snapshot load() throws IOException {
         try (Connection connection = open()) {
             initialize(connection);
-            migrateLegacy(connection);
             return readSnapshot(connection);
         } catch (SQLException exception) { throw new IOException("Could not load priority database", exception); }
     }
@@ -89,40 +83,7 @@ final class PriorityPlayerStore {
     private static void initialize(Connection connection) throws SQLException {
         try (Statement statement = connection.createStatement()) {
             statement.executeUpdate("CREATE TABLE IF NOT EXISTS priority_players (identity TEXT PRIMARY KEY)");
-            statement.executeUpdate("CREATE TABLE IF NOT EXISTS metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)");
         }
-    }
-
-    private void migrateLegacy(Connection connection) throws SQLException, IOException {
-        try (PreparedStatement check = connection.prepareStatement("SELECT 1 FROM metadata WHERE key = ?")) {
-            check.setString(1, MIGRATION_KEY);
-            try (ResultSet result = check.executeQuery()) { if (result.next()) return; }
-        }
-        connection.setAutoCommit(false);
-        try {
-            if (Files.isRegularFile(legacyFile)) {
-                try (PreparedStatement insert = connection.prepareStatement(
-                        "INSERT OR IGNORE INTO priority_players(identity) VALUES (?)")) {
-                    for (String sourceLine : Files.readAllLines(legacyFile, StandardCharsets.UTF_8)) {
-                        String line = sourceLine.trim();
-                        if (line.isEmpty() || line.startsWith("#")) continue;
-                        insert.setString(1, normalize(line));
-                        insert.addBatch();
-                    }
-                    insert.executeBatch();
-                }
-            }
-            try (PreparedStatement marker = connection.prepareStatement(
-                    "INSERT INTO metadata(key,value) VALUES (?,?)")) {
-                marker.setString(1, MIGRATION_KEY);
-                marker.setString(2, "complete");
-                marker.executeUpdate();
-            }
-            connection.commit();
-        } catch (SQLException | IOException | RuntimeException exception) {
-            connection.rollback();
-            throw exception;
-        } finally { connection.setAutoCommit(true); }
     }
 
     private static Snapshot readSnapshot(Connection connection) throws SQLException {

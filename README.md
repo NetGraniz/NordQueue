@@ -1,16 +1,12 @@
 # NordQueue
 
-Velocity queue, priority access, failover, queue notices, and queue TAB presentation in one plugin.
-
-NordQueue 1.4.0 replaces the standalone NordQueueNotice, NordQueueTab, and NordPing plugins. Their settings remain separated inside one directory:
+Independent Velocity queue, priority access, failover, notices, TAB presentation, and server-list label in one plugin. NordQueue 2.0.0 keeps all settings separated inside one directory:
 
 - `plugins/nordqueue/config.properties` — queue, priority, failover, and NordBans database path
 - `plugins/nordqueue/notice.properties` — recurring queue notices
 - `plugins/nordqueue/tab.properties` — queue TAB presentation
 - `plugins/nordqueue/ping.properties` — server-list version label
 - `plugins/nordqueue/priority.db` — priority players
-
-On first start, missing integrated configuration files are copied from the old `plugins/nordqueuenotice`, `plugins/nordqueuetab`, and `plugins/nordping` directories when available.
 
 ## NordBans integration
 
@@ -20,15 +16,11 @@ NordQueue opens the database read-only and refreshes an immutable in-memory snap
 
 ## Commands
 
-- `/nordqueue status`
 - `/nordqueue health`
 - `/nordqueue reload`
-- `/nordqueue notice reload`
-- `/nordqueue tab reload`
-- `/nordqueue ping reload` (legacy `/nordping reload` remains compatible)
-- `/nordqueue priority add|remove|list <player>`
+- `/nordqueue priority add|remove|status <player>`
 
-All reload commands validate a new settings snapshot before replacing active settings.
+The single reload command validates and refreshes all current component settings.
 
 ## Platform
 

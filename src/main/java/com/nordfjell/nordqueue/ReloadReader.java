@@ -12,7 +12,7 @@ final class ReloadReader<T> implements AutoCloseable {
     ReloadReader() {
         worker = new ThreadPoolExecutor(1, 1, 0, TimeUnit.MILLISECONDS,
                 new ArrayBlockingQueue<>(1), task -> {
-                    Thread thread = new Thread(task, "NordQueueNotice-config-reader");
+                    Thread thread = new Thread(task, "NordQueue-config-reader");
                     thread.setDaemon(true); return thread;
                 });
     }

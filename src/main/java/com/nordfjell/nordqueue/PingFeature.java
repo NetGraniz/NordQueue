@@ -1,7 +1,5 @@
 package com.nordfjell.nordqueue;
 
-import com.velocitypowered.api.command.CommandMeta;
-import com.velocitypowered.api.command.SimpleCommand;
 import com.velocitypowered.api.event.Subscribe;
 import com.velocitypowered.api.event.proxy.ProxyPingEvent;
 import com.velocitypowered.api.proxy.ProxyServer;
@@ -34,8 +32,6 @@ final class PingFeature {
         try { versionName=load(true); }
         catch (IOException|RuntimeException error) { logger.error("Ping configuration rejected; using {}",DEFAULT_VERSION_NAME,error); }
         proxy.getEventManager().register(owner,this);
-        CommandMeta meta=proxy.getCommandManager().metaBuilder("nordping").plugin(owner).build();
-        proxy.getCommandManager().register(meta,new ReloadCommand());
         logger.info("Integrated ping label enabled: {}",versionName);
     }
 
@@ -61,12 +57,5 @@ final class PingFeature {
         if(value.isEmpty()||value.length()>128||value.chars().anyMatch(Character::isISOControl))throw new IOException("Invalid version-name");
         if(create&&!Files.exists(config)){properties.setProperty("version-name",value);try(OutputStream output=Files.newOutputStream(config)){properties.store(output,"NordQueue server-list version label");}}
         return value;
-    }
-
-    private final class ReloadCommand implements SimpleCommand {
-        @Override public boolean hasPermission(Invocation invocation){return invocation.source().hasPermission("nordping.admin");}
-        @Override public void execute(Invocation invocation){
-            invocation.source().sendPlainMessage(reload(invocation.source())?"Ping reload queued.":stopping?"NordQueue is stopping.":"Ping reload is already pending.");
-        }
     }
 }
