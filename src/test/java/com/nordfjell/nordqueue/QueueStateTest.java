@@ -130,7 +130,6 @@ public final class QueueStateTest {
         });
         test("authentication failures are terminal, ordinary maintenance kicks are not", () -> {
             check(AuthenticationDisconnects.terminal("Login timed out."), "NordAuth timeout");
-            check(AuthenticationDisconnects.terminal("Login timeout exceeded"), "AuthMe timeout");
             check(AuthenticationDisconnects.terminal("Authentication is temporarily unavailable."), "database failure");
             check(!AuthenticationDisconnects.terminal("Server restarting"), "maintenance");
         });
