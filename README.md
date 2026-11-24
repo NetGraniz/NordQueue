@@ -29,3 +29,7 @@ The single reload command validates and refreshes all current component settings
 - SQLite JDBC is shaded into the release JAR
 
 See [BUILDING.md](BUILDING.md) for the verified build command.
+
+## License
+
+Current development on `main` is licensed under [GNU GPL v3.0 only](LICENSE). The latest published release remains available under the MIT License stated on its release page.
