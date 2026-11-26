@@ -102,7 +102,6 @@ final class QueueState<T> {
     synchronized int size() { return entries.size(); }
     synchronized int regularSize() { return regular.size(); }
     synchronized int prioritySize() { return priority.size(); }
-    synchronized int sessionCount() { return sessions.size(); }
     synchronized Attempt<T> pending() { return pending; }
 
     synchronized void rebalance(Predicate<T> isPriority) {

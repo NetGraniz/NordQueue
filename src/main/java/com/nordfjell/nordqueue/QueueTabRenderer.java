@@ -1,6 +1,5 @@
 package com.nordfjell.nordqueue;
 
-import com.nordfjell.nordqueue.QueueSnapshot;
 import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.player.TabList;

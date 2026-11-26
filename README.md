@@ -1,6 +1,6 @@
 # NordQueue
 
-Independent Velocity queue, priority access, failover, notices, TAB presentation, and server-list label in one plugin. NordQueue 2.0.0 keeps all settings separated inside one directory:
+Independent Velocity queue, priority access, failover, notices, TAB presentation, and server-list label in one plugin. NordQueue 2.0.1 keeps all settings separated inside one directory:
 
 - `plugins/nordqueue/config.properties` — queue, priority, failover, and NordBans database path
 - `plugins/nordqueue/notice.properties` — recurring queue notices

@@ -30,7 +30,9 @@ record NoticeSettings(long intervalSeconds, long initialDelayMillis, int clearLi
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             defaults.store(bytes, "NordQueue notice configuration. MiniMessage formatting is supported.");
             try { Files.write(config, bytes.toByteArray(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE); }
-            catch (FileAlreadyExistsException concurrentCreation) { /* Load, never replace. */ }
+            catch (FileAlreadyExistsException concurrentCreation) {
+                if (!Files.isRegularFile(config, LinkOption.NOFOLLOW_LINKS)) throw concurrentCreation;
+            }
         }
         if (!Files.isRegularFile(config, LinkOption.NOFOLLOW_LINKS)) throw new IOException("Config is missing or is not a regular file");
         byte[] bytes;

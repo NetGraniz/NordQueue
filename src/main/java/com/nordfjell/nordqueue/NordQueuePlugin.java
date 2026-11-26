@@ -19,7 +19,6 @@ import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ConnectionRequestBuilder;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.server.RegisteredServer;
-import com.velocitypowered.api.proxy.ServerConnection;
 import com.velocitypowered.api.proxy.server.ServerPing;
 import com.velocitypowered.api.scheduler.ScheduledTask;
 import net.kyori.adventure.text.Component;
@@ -45,13 +44,14 @@ import java.util.UUID;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
 
 @Plugin(
         id = "nordqueue",
         name = "NordQueue",
-        version = "2.0.0",
+        version = "2.0.1",
         description = "Lightweight queue and backend failover for Nord Fjell",
         authors = {"Nord Fjell"}
 )
@@ -68,7 +68,7 @@ public final class NordQueuePlugin {
     private final PriorityPlayerStore priorityStore;
     private volatile PriorityPlayerStore.Snapshot priorityPlayers =
             new PriorityPlayerStore.Snapshot(java.util.Set.of(), java.util.Set.of());
-    private volatile long taskGeneration;
+    private final AtomicLong taskGeneration = new AtomicLong();
     private volatile boolean stopping;
 
     private volatile Settings settings = Settings.defaults();
@@ -124,7 +124,7 @@ public final class NordQueuePlugin {
     public void onProxyShutdown(ProxyShutdownEvent event) {
         synchronized (taskLock) {
             stopping = true;
-            taskGeneration++;
+            taskGeneration.incrementAndGet();
             if (displayTask != null) displayTask.cancel();
             if (transferTask != null) transferTask.cancel();
             queueState.close();
@@ -254,10 +254,6 @@ public final class NordQueuePlugin {
         return snapshot().position(uuid);
     }
 
-    public int queueSize() {
-        return queueState.size();
-    }
-
     public int priorityQueueSize() {
         return queueState.prioritySize();
     }
@@ -266,19 +262,7 @@ public final class NordQueuePlugin {
         return queueState.regularSize();
     }
 
-    public List<UUID> queuedPlayers() {
-        return snapshot().orderedIds();
-    }
-
     public QueueSnapshot snapshot() { return queueState.snapshot(); }
-
-    public long estimatedSeconds(UUID uuid) {
-        QueueSnapshot snapshot = snapshot();
-        int position = snapshot.absolutePosition(uuid);
-        if (position <= 0) return 0L;
-        long playersAhead = Math.max(0L, position - 1L);
-        return playersAhead * settings.transferIntervalSeconds;
-    }
 
     public String queueServerName() {
         return settings.queueServer;
@@ -310,11 +294,11 @@ public final class NordQueuePlugin {
     private void startTasks() {
         synchronized (taskLock) {
             if (stopping) return;
-            long generation = ++taskGeneration;
+            long generation = taskGeneration.incrementAndGet();
             if (displayTask != null) displayTask.cancel();
             if (transferTask != null) transferTask.cancel();
             displayTask = proxy.getScheduler().buildTask(this, () -> {
-                        if (!stopping && generation == taskGeneration) updateTitles();
+                        if (!stopping && generation == taskGeneration.get()) updateTitles();
                     })
                     .delay(500, TimeUnit.MILLISECONDS)
                     .repeat(settings.displayIntervalMillis, TimeUnit.MILLISECONDS)
@@ -341,10 +325,10 @@ public final class NordQueuePlugin {
                 boolean first = position == 1;
                 boolean priority = snapshot.isPriority(uuid);
                 String titleTemplate = first
-                        ? (priority ? config.priorityFirstTitle : config.firstTitle)
-                        : (priority ? config.priorityPositionTitle : config.positionTitle);
+                        ? priority ? config.priorityFirstTitle : config.firstTitle
+                        : priority ? config.priorityPositionTitle : config.positionTitle;
                 String subtitleTemplate = priority ? config.prioritySubtitle
-                        : (first ? config.firstSubtitle : config.positionSubtitle);
+                        : first ? config.firstSubtitle : config.positionSubtitle;
                 Component title = miniMessage.deserialize(titleTemplate,
                         Placeholder.unparsed("position", Integer.toString(position)),
                         Placeholder.unparsed("size", Integer.toString(snapshot.size())),
@@ -366,7 +350,7 @@ public final class NordQueuePlugin {
         RegisteredServer main;
         Settings config;
         synchronized (taskLock) {
-            if (stopping || generation != taskGeneration) return;
+            if (stopping || generation != taskGeneration.get()) return;
             if (!banAdmissionReady()) return;
             config = settings;
             Optional<RegisteredServer> target = proxy.getServer(config.mainServer);
