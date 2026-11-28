@@ -54,17 +54,15 @@ final class QueueTabRenderer {
         TabListEntry current = tab.getEntry(id).orElse(null);
         TabListEntry own = view.owned.get(id);
         if (current != null && current != own) {
-            view.owned.remove(id); // A backend or another plugin already supplies the standard entry.
+            view.owned.remove(id);
+            showStandardEntry(current, player); // PicoLimbo supplies the profile entry but may keep it unlisted.
         } else if (current == null) {
             int latency = latency(player);
             current = TabListEntry.builder().tabList(tab).profile(player.getGameProfile())
                 .latency(latency).gameMode(0).listed(true).listOrder(0).build();
             tab.addEntry(current); view.owned.put(id, current);
         } else {
-            int latency = latency(player);
-            if (current.getLatency() != latency) current.setLatency(latency);
-            if (current.getListOrder() != 0) current.setListOrder(0);
-            if (!current.isListed()) current.setListed(true);
+            showStandardEntry(current, player);
         }
         if (view.position != position || view.size != size || !settings.equals(view.settings)) {
             Component header = text(settings.header(), position, size);
@@ -83,6 +81,13 @@ final class QueueTabRenderer {
     }
     private static int latency(Player player) {
         return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, player.getPing()));
+    }
+    private static void showStandardEntry(TabListEntry entry, Player player) {
+        int latency = latency(player);
+        if (entry.getDisplayNameComponent().isPresent()) entry.setDisplayName(null);
+        if (entry.getLatency() != latency) entry.setLatency(latency);
+        if (entry.getListOrder() != 0) entry.setListOrder(0);
+        if (!entry.isListed()) entry.setListed(true);
     }
     private void removeOwned(TabList tab, UUID id, TabListEntry owned) {
         if (tab.getEntry(id).orElse(null) == owned) tab.removeEntry(id);

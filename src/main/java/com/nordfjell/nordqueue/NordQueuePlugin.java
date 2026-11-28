@@ -475,7 +475,7 @@ public final class NordQueuePlugin {
         Component displayedSubtitle = subtitle;
         if (settings.centerTextSize == CenterTextSize.SMALL) {
             displayedTitle = Component.empty();
-            displayedSubtitle = title.append(Component.newline()).append(subtitle);
+            displayedSubtitle = title.append(Component.space()).append(subtitle);
         }
         player.showTitle(Title.title(displayedTitle, displayedSubtitle, Title.Times.times(
                 Duration.ZERO, Duration.ofMillis(settings.titleStayMillis), Duration.ZERO)));
