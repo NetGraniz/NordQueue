@@ -339,8 +339,7 @@ public final class NordQueuePlugin {
                         Placeholder.unparsed("size", Integer.toString(snapshot.size())),
                         Placeholder.unparsed("regular_size", Integer.toString(snapshot.regularSize())),
                         Placeholder.unparsed("priority_size", Integer.toString(snapshot.prioritySize())));
-                player.showTitle(Title.title(title, subtitle, Title.Times.times(
-                        Duration.ZERO, Duration.ofMillis(config.titleStayMillis), Duration.ZERO)));
+                showCenteredText(player, title, subtitle, config);
             });
         }
     }
@@ -468,7 +467,17 @@ public final class NordQueuePlugin {
         Component subtitle = miniMessage.deserialize(settings.banSubtitle,
                 Placeholder.unparsed("reason", ban.reason()),
                 Placeholder.unparsed("remaining", remaining));
-        player.showTitle(Title.title(title, subtitle, Title.Times.times(
+        showCenteredText(player, title, subtitle, settings);
+    }
+
+    private static void showCenteredText(Player player, Component title, Component subtitle, Settings settings) {
+        Component displayedTitle = title;
+        Component displayedSubtitle = subtitle;
+        if (settings.centerTextSize == CenterTextSize.SMALL) {
+            displayedTitle = Component.empty();
+            displayedSubtitle = title.append(Component.newline()).append(subtitle);
+        }
+        player.showTitle(Title.title(displayedTitle, displayedSubtitle, Title.Times.times(
                 Duration.ZERO, Duration.ofMillis(settings.titleStayMillis), Duration.ZERO)));
     }
 
@@ -524,6 +533,7 @@ public final class NordQueuePlugin {
             putDefault(properties, "connection-attempt-timeout-seconds", Long.toString(defaults.connectionAttemptTimeoutSeconds));
             putDefault(properties, "display-interval-millis", Long.toString(defaults.displayIntervalMillis));
             putDefault(properties, "title-stay-millis", Long.toString(defaults.titleStayMillis));
+            putDefault(properties, "center-text-size", defaults.centerTextSize.configValue);
             putDefault(properties, "first-title", defaults.firstTitle);
             putDefault(properties, "first-subtitle", defaults.firstSubtitle);
             putDefault(properties, "priority-first-title", defaults.priorityFirstTitle);
@@ -694,6 +704,20 @@ public final class NordQueuePlugin {
         }
     }
 
+    private enum CenterTextSize {
+        LARGE("large"), SMALL("small");
+
+        private final String configValue;
+        CenterTextSize(String configValue) { this.configValue = configValue; }
+
+        static CenterTextSize parse(String value) {
+            for (CenterTextSize size : values()) {
+                if (size.configValue.equalsIgnoreCase(value.trim())) return size;
+            }
+            throw new IllegalArgumentException("center-text-size must be large or small");
+        }
+    }
+
     private record Settings(
             String queueServer,
             String mainServer,
@@ -704,6 +728,7 @@ public final class NordQueuePlugin {
             long connectionAttemptTimeoutSeconds,
             long displayIntervalMillis,
             long titleStayMillis,
+            CenterTextSize centerTextSize,
             String firstTitle,
             String firstSubtitle,
             String priorityFirstTitle,
@@ -721,7 +746,7 @@ public final class NordQueuePlugin {
     ) {
         private static Settings defaults() {
             return new Settings(
-                    "queue", "main", 100, 5L, 1L, 5L, 30L, 1000L, 2200L,
+                    "queue", "main", 100, 5L, 1L, 5L, 30L, 1000L, 2200L, CenterTextSize.LARGE,
                     "<gold>You are first in queue</gold>",
                     "<yellow>Connecting...</yellow>",
                     "<gold>You are first in priority queue</gold>",
@@ -751,6 +776,7 @@ public final class NordQueuePlugin {
                     Math.min(300L, positiveLong(p, "connection-attempt-timeout-seconds", d.connectionAttemptTimeoutSeconds)),
                     Math.max(250L, positiveLong(p, "display-interval-millis", d.displayIntervalMillis)),
                     Math.max(1000L, positiveLong(p, "title-stay-millis", d.titleStayMillis)),
+                    CenterTextSize.parse(p.getProperty("center-text-size", d.centerTextSize.configValue)),
                     p.getProperty("first-title", d.firstTitle),
                     p.getProperty("first-subtitle", d.firstSubtitle),
                     p.getProperty("priority-first-title", d.priorityFirstTitle),

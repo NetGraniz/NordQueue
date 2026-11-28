@@ -4,7 +4,6 @@ import com.velocitypowered.api.proxy.Player;
 import com.velocitypowered.api.proxy.ProxyServer;
 import com.velocitypowered.api.proxy.player.TabList;
 import com.velocitypowered.api.proxy.player.TabListEntry;
-import com.velocitypowered.api.util.GameProfile;
 import net.kyori.adventure.text.Component;
 import net.kyori.adventure.text.minimessage.MiniMessage;
 import net.kyori.adventure.text.minimessage.tag.resolver.Placeholder;
@@ -12,7 +11,6 @@ import java.util.*;
 
 /** Called only under the lifecycle lock. Never adopt entries belonging to other producers. */
 final class QueueTabRenderer {
-    record Row(UUID id, GameProfile profile, Component name, int order) {}
     private static final class View {
         final Player player;
         final Map<UUID, TabListEntry> owned = new HashMap<>();
@@ -24,33 +22,7 @@ final class QueueTabRenderer {
     private final Map<UUID, View> views = new HashMap<>();
     private final Map<UUID, Player> outsideQueue = new HashMap<>();
     private final MiniMessage mini = MiniMessage.miniMessage();
-    private long version = Long.MIN_VALUE;
-    private QueueTabSettings frameSettings;
-    private Map<UUID, Row> rows = Map.of();
-    private List<Row> leading = List.of();
-    private Set<UUID> leadingIds = Set.of();
-
     void refresh(ProxyServer proxy, QueueSnapshot snapshot, String queueServer, QueueTabSettings settings) {
-        if (version != snapshot.version() || !settings.equals(frameSettings)) {
-            Map<UUID, Row> next = new HashMap<>();
-            List<Row> first = new ArrayList<>(settings.maxVisible());
-            for (UUID id : snapshot.orderedIds()) {
-                Player player = proxy.getPlayer(id).orElse(null);
-                if (player == null || !player.isActive()) continue;
-                int position = snapshot.absolutePosition(id);
-                Component name = mini.deserialize(settings.playerFormat(),
-                    Placeholder.unparsed("player", player.getUsername()),
-                    Placeholder.unparsed("position", Integer.toString(position)),
-                    Placeholder.unparsed("size", Integer.toString(snapshot.size())),
-                    Placeholder.unparsed("estimate", QueueEstimate.format(position)));
-                Row row = new Row(id, player.getGameProfile(), name, Integer.MAX_VALUE - position);
-                next.put(id, row);
-                if (first.size() < settings.maxVisible()) first.add(row);
-            }
-            rows = Map.copyOf(next); leading = List.copyOf(first);
-            leadingIds = Set.copyOf(first.stream().map(Row::id).toList());
-            version = snapshot.version(); frameSettings = settings;
-        }
         Set<UUID> active = new HashSet<>();
         for (Player player : proxy.getAllPlayers()) {
             UUID id = player.getUniqueId(); active.add(id);
@@ -62,49 +34,37 @@ final class QueueTabRenderer {
             if (view == null || view.player != player) {
                 view = new View(player); views.put(id, view);
             }
-            sync(view, selected(id), snapshot.absolutePosition(id), snapshot.size(), settings);
+            sync(view, snapshot.absolutePosition(id), snapshot.size(), settings);
         }
         views.keySet().removeIf(id -> !active.contains(id));
         outsideQueue.keySet().removeIf(id -> !active.contains(id));
     }
 
-    private List<Row> selected(UUID viewer) {
-        if (leadingIds.contains(viewer)) return leading;
-        Row self = rows.get(viewer);
-        if (self == null) return leading;
-        List<Row> result = new ArrayList<>(leading);
-        if (result.size() == frameSettings.maxVisible()) result.removeLast();
-        result.add(self); return result;
-    }
-
-    private void sync(View view, List<Row> desired, int position, int size, QueueTabSettings settings) {
+    private void sync(View view, int position, int size, QueueTabSettings settings) {
         Player player = view.player;
         TabList tab = player.getTabList();
-        Set<UUID> ids = new HashSet<>();
-        for (Row row : desired) ids.add(row.id);
+        UUID id = player.getUniqueId();
         var iterator = view.owned.entrySet().iterator();
         while (iterator.hasNext()) {
             var old = iterator.next();
-            if (!ids.contains(old.getKey())) {
+            if (!old.getKey().equals(id)) {
                 removeOwned(tab, old.getKey(), old.getValue()); iterator.remove();
             }
         }
-        for (Row row : desired) {
-            TabListEntry current = tab.getEntry(row.id).orElse(null);
-            TabListEntry own = view.owned.get(row.id);
-            if (current != null && current != own) {
-                view.owned.remove(row.id); continue; // Relinquish entries replaced by another producer.
-            }
-            if (current == null) {
-                current = TabListEntry.builder().tabList(tab).profile(row.profile).displayName(row.name)
-                    .latency(0).gameMode(0).listed(true).listOrder(row.order).build();
-                tab.addEntry(current); view.owned.put(row.id, current);
-            } else {
-                if (!current.getDisplayNameComponent().equals(Optional.of(row.name))) current.setDisplayName(row.name);
-                if (current.getLatency() != 0) current.setLatency(0);
-                if (current.getListOrder() != row.order) current.setListOrder(row.order);
-                if (!current.isListed()) current.setListed(true);
-            }
+        TabListEntry current = tab.getEntry(id).orElse(null);
+        TabListEntry own = view.owned.get(id);
+        if (current != null && current != own) {
+            view.owned.remove(id); // A backend or another plugin already supplies the standard entry.
+        } else if (current == null) {
+            int latency = latency(player);
+            current = TabListEntry.builder().tabList(tab).profile(player.getGameProfile())
+                .latency(latency).gameMode(0).listed(true).listOrder(0).build();
+            tab.addEntry(current); view.owned.put(id, current);
+        } else {
+            int latency = latency(player);
+            if (current.getLatency() != latency) current.setLatency(latency);
+            if (current.getListOrder() != 0) current.setListOrder(0);
+            if (!current.isListed()) current.setListed(true);
         }
         if (view.position != position || view.size != size || !settings.equals(view.settings)) {
             Component header = text(settings.header(), position, size);
@@ -120,6 +80,9 @@ final class QueueTabRenderer {
         return mini.deserialize(template, Placeholder.unparsed("position", Integer.toString(position)),
             Placeholder.unparsed("size", Integer.toString(size)),
             Placeholder.unparsed("estimate", QueueEstimate.format(position)));
+    }
+    private static int latency(Player player) {
+        return (int) Math.min(Integer.MAX_VALUE, Math.max(0L, player.getPing()));
     }
     private void removeOwned(TabList tab, UUID id, TabListEntry owned) {
         if (tab.getEntry(id).orElse(null) == owned) tab.removeEntry(id);
@@ -144,7 +107,10 @@ final class QueueTabRenderer {
             clear(player); outsideQueue.put(player.getUniqueId(), player);
         }
     }
-    void forgetAll() { views.clear(); outsideQueue.clear(); rows = Map.of(); leading = List.of(); leadingIds = Set.of(); version = Long.MIN_VALUE; }
+    void forgetAll() {
+        for (View view : List.copyOf(views.values())) clear(view.player);
+        outsideQueue.clear();
+    }
     int viewerCount() { return views.size(); }
     int ownedCount() { return views.values().stream().mapToInt(view -> view.owned.size()).sum(); }
 }
