@@ -1,12 +1,19 @@
 # NordQueue
 
-Independent Velocity queue, priority access, failover, notices, TAB presentation, and server-list label in one plugin. NordQueue 2.0.3 keeps all settings separated inside one directory:
+Independent Velocity queue, priority access, failover, rotating Action Bar messages, notices, TAB presentation, and server-list label in one plugin. NordQueue 2.0.4 keeps all settings separated inside one directory:
 
 - `plugins/nordqueue/config.properties` — queue, priority, failover, and NordBans database path
 - `plugins/nordqueue/notice.properties` — recurring queue notices
 - `plugins/nordqueue/tab.properties` — queue TAB presentation
+- `plugins/nordqueue/actionbar.properties` — rotating bottom-screen messages and interval
 - `plugins/nordqueue/ping.properties` — server-list version label
 - `plugins/nordqueue/priority.db` — priority players
+
+## Rotating Action Bar
+
+`actionbar.properties` accepts `interval-seconds` and a contiguous list of `message.1` through `message.20`. Changes apply through `/nordqueue reload`.
+
+Available placeholders are `<position>`, `<size>`, `<regular_size>`, `<priority_size>`, `<estimate>`, `<priority_estimate>`, `<regular_estimate>`, and `<skipped_last_hour>`. The last value counts successful priority admissions during the previous hour of the current proxy process.
 
 ## NordBans integration
 

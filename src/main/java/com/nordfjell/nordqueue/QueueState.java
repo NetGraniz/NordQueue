@@ -36,6 +36,7 @@ final class QueueState<T> {
         final String target;
         private final Entry<T> entry;
         private boolean admissionConsumed;
+        private boolean admissionCounted;
         Attempt(Entry<T> entry, String target) {
             this.entry = entry;
             this.session = entry.session;
@@ -152,6 +153,16 @@ final class QueueState<T> {
 
     synchronized boolean admissionConsumed(Attempt<T> attempt) {
         return pending == attempt && attempt.admissionConsumed;
+    }
+
+    synchronized boolean markAdmissionCounted(Attempt<T> attempt) {
+        if (attempt.admissionCounted) return false;
+        attempt.admissionCounted = true;
+        return true;
+    }
+
+    synchronized boolean priority(Attempt<T> attempt) {
+        return attempt.entry.priority;
     }
 
     synchronized boolean relevant(Attempt<T> attempt) {

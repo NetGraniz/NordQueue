@@ -1,1 +1,1 @@
-{"id":"nordqueue","name":"NordQueue","version":"${project.version}","description":"Queue, notices, TAB, direct NordBans SQLite integration, and backend failover","authors":["Nord Fjell"],"dependencies":[],"main":"com.nordfjell.nordqueue.NordQueuePlugin"}
+{"id":"nordqueue","name":"NordQueue","version":"${project.version}","description":"Queue, notices, rotating Action Bar, TAB, direct NordBans SQLite integration, and backend failover","authors":["Nord Fjell"],"dependencies":[],"main":"com.nordfjell.nordqueue.NordQueuePlugin"}

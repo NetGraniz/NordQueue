@@ -35,7 +35,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayDeque;
 import java.util.ArrayList;
+import java.util.Deque;
 import java.util.List;
 import java.util.Locale;
 import java.util.Optional;
@@ -51,7 +53,7 @@ import java.util.concurrent.ScheduledExecutorService;
 @Plugin(
         id = "nordqueue",
         name = "NordQueue",
-        version = "2.0.1",
+        version = "2.0.4",
         description = "Lightweight queue and backend failover for Nord Fjell",
         authors = {"Nord Fjell"}
 )
@@ -78,7 +80,10 @@ public final class NordQueuePlugin {
     private ScheduledExecutorService banReaderWorker;
     private QueueNoticeFeature notices;
     private QueueTabFeature queueTab;
+    private QueueActionBarFeature actionBar;
     private PingFeature pingFeature;
+    private final Object admissionHistoryLock = new Object();
+    private final Deque<Long> admissionHistory = new ArrayDeque<>();
     private String reportedBanProblem = "";
     private final AtomicBoolean settingsReloadPending = new AtomicBoolean();
 
@@ -96,7 +101,8 @@ public final class NordQueuePlugin {
         configureBanReader();
         notices=new QueueNoticeFeature(this,proxy,logger,dataDirectory.resolve("notice.properties"));
         queueTab=new QueueTabFeature(this,proxy,logger,dataDirectory.resolve("tab.properties"));
-        notices.start();queueTab.start();
+        actionBar=new QueueActionBarFeature(this,proxy,logger,dataDirectory.resolve("actionbar.properties"));
+        notices.start();queueTab.start();actionBar.start();
         pingFeature=new PingFeature(this,proxy,logger,dataDirectory.resolve("ping.properties"));pingFeature.start();
         registerCommands();
         startTasks();
@@ -132,6 +138,7 @@ public final class NordQueuePlugin {
             attemptTimeouts.clear();
             if(notices!=null)notices.stop();
             if(queueTab!=null)queueTab.stop();
+            if(actionBar!=null)actionBar.stop();
         if(pingFeature!=null)pingFeature.stop();
             BanDatabaseReader reader=banReader;if(reader!=null)reader.close();
             if(banReaderWorker!=null)banReaderWorker.shutdownNow();
@@ -185,7 +192,10 @@ public final class NordQueuePlugin {
                 return;
             }
             QueueState.Attempt<Player> completed = queueState.arrived(session(player));
-            if (completed != null) cancelTimeout(completed);
+            if (completed != null) {
+                cancelTimeout(completed);
+                if (queueState.priority(completed) && queueState.markAdmissionCounted(completed)) recordPrioritySkip();
+            }
             player.clearTitle();
         }
     }
@@ -266,6 +276,20 @@ public final class NordQueuePlugin {
 
     public String queueServerName() {
         return settings.queueServer;
+    }
+
+    int skippedLastHour() {
+        long cutoff = nowMillis() - TimeUnit.HOURS.toMillis(1);
+        synchronized (admissionHistoryLock) {
+            while (!admissionHistory.isEmpty() && admissionHistory.peekFirst() < cutoff) admissionHistory.removeFirst();
+            return admissionHistory.size();
+        }
+    }
+
+    private void recordPrioritySkip() {
+        synchronized (admissionHistoryLock) {
+            admissionHistory.addLast(nowMillis());
+        }
     }
 
     private void enqueue(Player player) {
@@ -388,8 +412,13 @@ public final class NordQueuePlugin {
                     // Keep its reservation until arrival/disconnect/watchdog, not until this cancellation.
                     return;
                 }
-                if (queueState.finish(attempt, throwable == null && result != null && result.isSuccessful(),
-                        nowMillis(), TimeUnit.SECONDS.toMillis(config.failedRetrySeconds))) cancelTimeout(attempt);
+                boolean successful = throwable == null && result != null && result.isSuccessful();
+                if (queueState.finish(attempt, successful,
+                        nowMillis(), TimeUnit.SECONDS.toMillis(config.failedRetrySeconds))) {
+                    cancelTimeout(attempt);
+                    if (successful && queueState.priority(attempt)
+                            && queueState.markAdmissionCounted(attempt)) recordPrioritySkip();
+                }
             });
         } catch (RuntimeException exception) {
             queueState.finish(attempt, false, nowMillis(), TimeUnit.SECONDS.toMillis(config.failedRetrySeconds));
@@ -626,7 +655,7 @@ public final class NordQueuePlugin {
                 queueReload(invocation.source(),true);
                 return;
             }
-            if(arguments.length==1&&arguments[0].equalsIgnoreCase("health")){invocation.source().sendPlainMessage((notices==null?"notices=unavailable":notices.health())+"; "+(queueTab==null?"tab=unavailable":queueTab.health())+"; "+(pingFeature==null?"ping=unavailable":pingFeature.health())+"; bans="+(banReader==null?"disabled":banReader.problem().isEmpty()?"ready":banReader.problem()));return;}
+            if(arguments.length==1&&arguments[0].equalsIgnoreCase("health")){invocation.source().sendPlainMessage((notices==null?"notices=unavailable":notices.health())+"; "+(queueTab==null?"tab=unavailable":queueTab.health())+"; "+(actionBar==null?"actionbar=unavailable":actionBar.health())+"; "+(pingFeature==null?"ping=unavailable":pingFeature.health())+"; bans="+(banReader==null?"disabled":banReader.problem().isEmpty()?"ready":banReader.problem()));return;}
             if (arguments.length == 3 && arguments[0].equalsIgnoreCase("priority")) {
                 managePriority(invocation.source(), arguments[1], arguments[2]);
                 return;
@@ -646,6 +675,7 @@ public final class NordQueuePlugin {
                     if(all){ok=reloadSettings();if(ok){configureBanReader();startTasks();}}
                     else ok=true;
                     if(ok&&queueTab!=null)ok=queueTab.reload();
+                    if(ok&&all&&actionBar!=null)ok=actionBar.reload();
                     if(ok&&all&&notices!=null&&!notices.reload(source))ok=false;
                     if(ok&&all&&pingFeature!=null&&!pingFeature.reload(source))ok=false;
                     source.sendPlainMessage(ok?"NordQueue configuration reloaded.":"NordQueue reload rejected; previous settings retained.");
