@@ -11,4 +11,4 @@ Run:
 .\build.ps1 -MavenCommand "C:\path\to\mvn.cmd"
 ```
 
-The script runs `mvn clean verify`, checks the exact shaded release JAR, and validates `velocity-plugin.json`. The production artifact is `target/NordQueue-2.0.4.jar`.
+The script runs `mvn clean verify`, checks the exact shaded release JAR, and validates `velocity-plugin.json`. The production artifact is `target/NordQueue-2.0.5.jar`.

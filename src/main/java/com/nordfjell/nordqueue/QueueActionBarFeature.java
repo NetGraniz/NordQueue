@@ -69,8 +69,8 @@ final class QueueActionBarFeature {
         int index = (int) ((elapsed / period) % active.messages().size());
         String template = active.messages().get(index);
         String skippedLastHour = Integer.toString(owner.skippedLastHour());
-        String priorityEstimate = QueueEstimate.format(snapshot.prioritySize() + 1);
-        String regularEstimate = QueueEstimate.format(snapshot.size() + 1);
+        String priorityEstimate = QueueEstimate.format(snapshot.prioritySize());
+        String regularEstimate = QueueEstimate.format(snapshot.size());
         for (Player player : proxy.getAllPlayers()) {
             int position = snapshot.absolutePosition(player.getUniqueId());
             if (position <= 0 || !player.isActive() || player.getCurrentServer()
